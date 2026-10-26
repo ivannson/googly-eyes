@@ -1,0 +1,213 @@
+<div id="ld2410-zone-demo">
+  <h2>Three LD2410 gaze zones</h2>
+  <div class="viz-controls" aria-label="People positions">
+    <label class="form-label" for="person-a-angle">
+      Person A: <span id="person-a-value" class="tabular-nums">−35°</span>
+      <input id="person-a-angle" class="form-range" type="range" min="-110" max="110" value="-35" step="5">
+    </label>
+    <label class="form-check form-switch">
+      <input id="person-b-enabled" class="form-check-input" type="checkbox">
+      <span class="form-check-label">Add person B</span>
+    </label>
+    <label class="form-label" for="person-b-angle" id="person-b-label" hidden>
+      Person B: <span id="person-b-value" class="tabular-nums">55°</span>
+      <input id="person-b-angle" class="form-range" type="range" min="-110" max="110" value="55" step="5">
+    </label>
+  </div>
+
+  <svg id="zone-map" viewBox="0 0 720 430" role="img" aria-labelledby="zone-title zone-desc">
+    <title id="zone-title">Top-down view of three angled LD2410 sensors</title>
+    <desc id="zone-desc">Left, centre, and right sensors have overlapping detection fields. Move people around the field to see which sensor outputs become active.</desc>
+    <g id="beams"></g>
+    <path d="M 85 360 Q 360 52 635 360" fill="none" stroke="var(--border)" stroke-width="1" />
+    <text x="360" y="28" text-anchor="middle" class="map-label">Front</text>
+    <g id="people"></g>
+    <g id="sensors"></g>
+  </svg>
+
+  <div class="viz-grid" aria-live="polite">
+    <div class="card viz-stat">
+      <span class="text-muted">Sensor outputs</span>
+      <span id="active-sensors" class="viz-stat-value">Left + centre</span>
+    </div>
+    <div class="card viz-stat">
+      <span class="text-muted">Eye decision</span>
+      <span id="gaze-decision" class="viz-stat-value">Look left</span>
+      <span id="decision-detail" class="text-small text-muted">Overlapping zones provide only a rough direction.</span>
+    </div>
+  </div>
+
+  <div class="viz-row legend text-small" aria-label="Legend">
+    <span><i class="swatch swatch-left"></i>Left sensor</span>
+    <span><i class="swatch swatch-centre"></i>Centre sensor</span>
+    <span><i class="swatch swatch-right"></i>Right sensor</span>
+    <span><i class="person-dot"></i>Person</span>
+  </div>
+</div>
+
+<style>
+  #ld2410-zone-demo { color: var(--foreground); }
+  #ld2410-zone-demo h2 { margin-bottom: 12px; }
+  #ld2410-zone-demo .viz-controls { align-items: end; margin-bottom: 8px; }
+  #ld2410-zone-demo .form-label { min-width: 190px; flex: 1 1 220px; }
+  #ld2410-zone-demo .form-range { display: block; width: 100%; margin-top: 6px; }
+  #zone-map { width: 100%; height: auto; display: block; }
+  #zone-map .map-label { fill: var(--muted-foreground); font-size: 12px; }
+  #zone-map .sensor-label { fill: var(--foreground); font-size: 12px; font-weight: 500; }
+  #zone-map .person-label { fill: var(--foreground); font-size: 12px; font-weight: 500; }
+  #ld2410-zone-demo .legend { justify-content: center; margin-top: 12px; color: var(--muted-foreground); }
+  #ld2410-zone-demo .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  #ld2410-zone-demo .swatch { width: 12px; height: 12px; display: inline-block; border-radius: 3px; }
+  #ld2410-zone-demo .swatch-left { background: var(--viz-series-1); }
+  #ld2410-zone-demo .swatch-centre { background: var(--viz-series-2); }
+  #ld2410-zone-demo .swatch-right { background: var(--viz-series-3); }
+  #ld2410-zone-demo .person-dot { width: 12px; height: 12px; display: inline-block; border-radius: 50%; background: var(--foreground); }
+  @media (max-width: 520px) {
+    #ld2410-zone-demo .viz-controls { display: block; }
+    #ld2410-zone-demo .form-label { display: block; margin-bottom: 12px; }
+  }
+</style>
+
+<script>
+(() => {
+  const root = document.getElementById('ld2410-zone-demo');
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const beams = root.querySelector('#beams');
+  const people = root.querySelector('#people');
+  const sensorsLayer = root.querySelector('#sensors');
+  const personA = root.querySelector('#person-a-angle');
+  const personB = root.querySelector('#person-b-angle');
+  const personBEnabled = root.querySelector('#person-b-enabled');
+  const personBLabel = root.querySelector('#person-b-label');
+  const cx = 360;
+  const cy = 376;
+  const radius = 315;
+  const nominalHalfWidth = 60;
+  const effectiveHalfWidth = 40;
+  const sensorDefs = [
+    { name: 'Left', angle: -60, color: 'var(--viz-series-1)', dx: -22 },
+    { name: 'Centre', angle: 0, color: 'var(--viz-series-2)', dx: 0 },
+    { name: 'Right', angle: 60, color: 'var(--viz-series-3)', dx: 22 }
+  ];
+
+  function svgElement(name, attrs) {
+    const el = document.createElementNS(svgNS, name);
+    Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, value));
+    return el;
+  }
+
+  function point(originX, angle, distance) {
+    const radians = angle * Math.PI / 180;
+    return { x: originX + Math.sin(radians) * distance, y: cy - Math.cos(radians) * distance };
+  }
+
+  function sectorPath(originX, centreAngle, halfWidth, distance) {
+    const points = [`M ${originX} ${cy}`];
+    for (let angle = centreAngle - halfWidth; angle <= centreAngle + halfWidth; angle += 4) {
+      const p = point(originX, angle, distance);
+      points.push(`L ${p.x.toFixed(1)} ${p.y.toFixed(1)}`);
+    }
+    points.push('Z');
+    return points.join(' ');
+  }
+
+  function angularDistance(a, b) {
+    return Math.abs(a - b);
+  }
+
+  function drawFixedScene() {
+    sensorDefs.forEach((sensor) => {
+      const originX = cx + sensor.dx;
+      beams.appendChild(svgElement('path', {
+        d: sectorPath(originX, sensor.angle, nominalHalfWidth, radius),
+        fill: sensor.color,
+        opacity: '0.07'
+      }));
+      beams.appendChild(svgElement('path', {
+        d: sectorPath(originX, sensor.angle, effectiveHalfWidth, radius),
+        fill: sensor.color,
+        opacity: '0.16'
+      }));
+
+      const group = svgElement('g', { transform: `translate(${originX} ${cy}) rotate(${sensor.angle})` });
+      group.appendChild(svgElement('rect', {
+        x: '-15', y: '-12', width: '30', height: '24', rx: '4', fill: sensor.color
+      }));
+      group.appendChild(svgElement('path', {
+        d: 'M 0 -12 L -6 -23 L 6 -23 Z', fill: sensor.color
+      }));
+      sensorsLayer.appendChild(group);
+
+      const label = svgElement('text', {
+        x: String(originX), y: '414', 'text-anchor': 'middle', class: 'sensor-label'
+      });
+      label.textContent = sensor.name;
+      sensorsLayer.appendChild(label);
+    });
+  }
+
+  function detectionMask(angles) {
+    return sensorDefs.map((sensor) =>
+      angles.some((angle) => angularDistance(angle, sensor.angle) <= effectiveHalfWidth)
+    );
+  }
+
+  function eyeDecision(mask) {
+    const code = mask.map((active) => active ? '1' : '0').join('');
+    const decisions = {
+      '000': ['Random animation', 'No occupied zone.'],
+      '100': ['Look far left', 'Only the left zone is occupied.'],
+      '110': ['Look left', 'The left and centre zones overlap here.'],
+      '010': ['Look centre', 'Only the centre zone is occupied.'],
+      '011': ['Look right', 'The centre and right zones overlap here.'],
+      '001': ['Look far right', 'Only the right zone is occupied.'],
+      '101': ['Alternate left ↔ right', 'Two separated zones appear occupied.'],
+      '111': ['Ambiguous—cycle zones', 'One central person or several people can produce the same result.']
+    };
+    return decisions[code];
+  }
+
+  function render() {
+    people.replaceChildren();
+    const angles = [Number(personA.value)];
+    if (personBEnabled.checked) angles.push(Number(personB.value));
+
+    angles.forEach((angle, index) => {
+      const p = point(cx, angle, 255 - index * 35);
+      const circle = svgElement('circle', {
+        cx: p.x.toFixed(1), cy: p.y.toFixed(1), r: '10', fill: 'var(--foreground)'
+      });
+      people.appendChild(circle);
+      const label = svgElement('text', {
+        x: p.x.toFixed(1), y: (p.y - 16).toFixed(1), 'text-anchor': 'middle', class: 'person-label'
+      });
+      label.textContent = index === 0 ? 'A' : 'B';
+      people.appendChild(label);
+    });
+
+    const mask = detectionMask(angles);
+    sensorDefs.forEach((sensor, index) => {
+      const originX = cx + sensor.dx;
+      const ring = svgElement('circle', {
+        cx: String(originX), cy: String(cy), r: '20', fill: 'none',
+        stroke: mask[index] ? sensor.color : 'var(--border)',
+        'stroke-width': mask[index] ? '4' : '1'
+      });
+      people.appendChild(ring);
+    });
+
+    const activeNames = sensorDefs.filter((_, i) => mask[i]).map((sensor) => sensor.name.toLowerCase());
+    root.querySelector('#active-sensors').textContent = activeNames.length ? activeNames.join(' + ') : 'None';
+    const decision = eyeDecision(mask);
+    root.querySelector('#gaze-decision').textContent = decision[0];
+    root.querySelector('#decision-detail').textContent = decision[1];
+    root.querySelector('#person-a-value').textContent = `${personA.value < 0 ? '−' : personA.value > 0 ? '+' : ''}${Math.abs(Number(personA.value))}°`;
+    root.querySelector('#person-b-value').textContent = `${personB.value < 0 ? '−' : personB.value > 0 ? '+' : ''}${Math.abs(Number(personB.value))}°`;
+    personBLabel.hidden = !personBEnabled.checked;
+  }
+
+  drawFixedScene();
+  [personA, personB, personBEnabled].forEach((control) => control.addEventListener('input', render));
+  render();
+})();
+</script>
