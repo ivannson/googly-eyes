@@ -39,7 +39,7 @@ With mmWave disabled, the eyes run their normal random animations continuously.
 ### Optional mmWave parts
 
 - Hi-Link LD2410 presence sensor
-- A stable 5 V supply for the sensor
+- A stable 5 V supply for the sensor (it's powered from USB in the current config)
 
 The LD2410 is optional. The displays work without it, and the current firmware
 does not initialize its UART because mmWave behavior is disabled.
